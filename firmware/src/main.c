@@ -1,4 +1,5 @@
 #include "pico/stdlib.h"
+#include "pico/time.h"
 
 #include <stdio.h>
 
@@ -13,6 +14,29 @@
 #define SENSOR_1         20
 #define SENSOR_2         19
 #define SENSOR_BOTTOM    18
+
+#define TIME_TO_EMERGENCY (10 * 1000)
+
+static uint32_t timer_counter = 0;
+static bool     timer_on = false;
+
+static void emergency()
+{
+    gpio_put(MOTOR, 0);
+    bool value = true;
+    for (;;) {
+        for (int i = 0; i < 4; ++i)
+            gpio_put(i, value);
+        sleep_ms(500);
+        value = !value;
+    }
+}
+
+static void reset_timer(bool timer_on_)
+{
+    timer_counter = to_ms_since_boot(get_absolute_time());
+    timer_on = timer_on_;
+}
 
 int main()
 {
@@ -47,7 +71,19 @@ int main()
     gpio_pull_up(SENSOR_2);
     gpio_pull_up(SENSOR_BOTTOM);
 
+    typedef enum { TOP, S1, S2, BOTTOM } Sensor;
+    bool desired_motor_state = false;
+
+    reset_timer(false);
+
     while (true) {
+
+        // check for emergency
+        if (!gpio_get(MOTOR_OFF))
+            emergency();
+        if (timer_on && (timer_counter + TIME_TO_EMERGENCY > to_ms_since_boot(get_absolute_time())))
+            emergency();
+
         // read sensors
         bool sensors[] = {
             !gpio_get(SENSOR_TOP),
@@ -57,9 +93,23 @@ int main()
         };
 
         // turn on LEDs according to the sensors
-        gpio_put(LED_LEVEL_TOP, sensors[0]);
-        gpio_put(LED_LEVEL_1, sensors[1]);
-        gpio_put(LED_LEVEL_2, sensors[2]);
-        gpio_put(LED_LEVEL_BOTTOM, sensors[3]);
+        gpio_put(LED_LEVEL_TOP, sensors[TOP]);
+        gpio_put(LED_LEVEL_1, sensors[S1]);
+        gpio_put(LED_LEVEL_2, sensors[S2]);
+        gpio_put(LED_LEVEL_BOTTOM, sensors[BOTTOM]);
+        
+        // manage motor
+        if (!sensors[BOTTOM] || !gpio_get(MOTOR_ON))
+            desired_motor_state = true;
+        if (sensors[TOP])
+            desired_motor_state = false;
+
+        gpio_put(MOTOR, desired_motor_state);
+
+        // emergency timer
+        if (desired_motor_state && !timer_on)
+            reset_timer(true);
+        if (!desired_motor_state)
+            timer_on = false;
     }
 }
