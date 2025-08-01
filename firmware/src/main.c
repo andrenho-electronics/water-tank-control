@@ -48,5 +48,18 @@ int main()
     gpio_pull_up(SENSOR_BOTTOM);
 
     while (true) {
+        // read sensors
+        bool sensors[] = {
+            !gpio_get(SENSOR_TOP),
+            !gpio_get(SENSOR_1),
+            !gpio_get(SENSOR_2),
+            !gpio_get(SENSOR_BOTTOM),
+        };
+
+        // turn on LEDs according to the sensors
+        gpio_put(LED_LEVEL_TOP, sensors[0]);
+        gpio_put(LED_LEVEL_1, sensors[1]);
+        gpio_put(LED_LEVEL_2, sensors[2]);
+        gpio_put(LED_LEVEL_BOTTOM, sensors[3]);
     }
 }
