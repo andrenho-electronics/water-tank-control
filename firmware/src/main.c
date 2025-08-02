@@ -3,22 +3,31 @@
 
 #include <stdio.h>
 
+#define TIME_TO_EMERGENCY (10 * 60 * 1000) // 10 min
+
+// pins
+
 #define LED_LEVEL_TOP     0
 #define LED_LEVEL_1       1
 #define LED_LEVEL_2       2
 #define LED_LEVEL_BOTTOM  3
 #define MOTOR_ON         14
-#define MOTOR_OFF        15
+#define EMERGENCY        15
 #define MOTOR            28
 #define SENSOR_TOP       21
 #define SENSOR_1         20
 #define SENSOR_2         19
 #define SENSOR_BOTTOM    18
 
-#define TIME_TO_EMERGENCY (10 * 1000)
+// types
 
-static uint32_t timer_counter = 0;
-static bool     timer_on = false;
+typedef enum { MotorOff, MotorOn, Emergency } State;
+typedef enum { TOP, S1, S2, BOTTOM } Sensor;
+
+// globals
+
+static absolute_time_t timer;
+static State           state = MotorOff;
 
 static void emergency()
 {
@@ -32,13 +41,7 @@ static void emergency()
     }
 }
 
-static void reset_timer(bool timer_on_)
-{
-    timer_counter = to_ms_since_boot(get_absolute_time());
-    timer_on = timer_on_;
-}
-
-int main()
+static void init_pins()
 {
     // turn on Pico LED
     gpio_init(PICO_DEFAULT_LED_PIN);
@@ -50,7 +53,7 @@ int main()
     gpio_init(LED_LEVEL_2);
     gpio_init(LED_LEVEL_BOTTOM);
     gpio_init(MOTOR_ON);
-    gpio_init(MOTOR_OFF);
+    gpio_init(EMERGENCY);
     gpio_init(MOTOR);
     gpio_init(SENSOR_TOP);
     gpio_init(SENSOR_1);
@@ -65,24 +68,21 @@ int main()
     gpio_set_dir(MOTOR, GPIO_OUT);
 
     gpio_pull_up(MOTOR_ON);
-    gpio_pull_up(MOTOR_OFF);
+    gpio_pull_up(EMERGENCY);
     gpio_pull_up(SENSOR_TOP);
     gpio_pull_up(SENSOR_1);
     gpio_pull_up(SENSOR_2);
     gpio_pull_up(SENSOR_BOTTOM);
 
-    typedef enum { TOP, S1, S2, BOTTOM } Sensor;
-    bool desired_motor_state = false;
+}
 
-    reset_timer(false);
+int main()
+{
+    init_pins();
+
+    timer = get_absolute_time();
 
     while (true) {
-
-        // check for emergency
-        if (!gpio_get(MOTOR_OFF))
-            emergency();
-        if (timer_on && (timer_counter + TIME_TO_EMERGENCY > to_ms_since_boot(get_absolute_time())))
-            emergency();
 
         // read sensors
         bool sensors[] = {
@@ -98,18 +98,32 @@ int main()
         gpio_put(LED_LEVEL_2, sensors[S2]);
         gpio_put(LED_LEVEL_BOTTOM, sensors[BOTTOM]);
         
-        // manage motor
-        if (!sensors[BOTTOM] || !gpio_get(MOTOR_ON))
-            desired_motor_state = true;
-        if (sensors[TOP])
-            desired_motor_state = false;
+        // manage states
+        State new_state = state;
 
-        gpio_put(MOTOR, desired_motor_state);
+        if (!gpio_get(EMERGENCY))
+            new_state = Emergency;
 
-        // emergency timer
-        if (desired_motor_state && !timer_on)
-            reset_timer(true);
-        if (!desired_motor_state)
-            timer_on = false;
+        switch (state) {
+            case MotorOff:
+                gpio_put(MOTOR, 0);
+                if ((!sensors[BOTTOM] && !sensors[TOP]) || !gpio_get(MOTOR_ON))
+                    new_state = MotorOn;
+                break;
+            case MotorOn:
+                gpio_put(MOTOR, 1);
+                if (sensors[TOP])
+                    new_state = MotorOff;
+                if (get_absolute_time() > delayed_by_ms(timer, TIME_TO_EMERGENCY))
+                    new_state = Emergency;
+                break;
+            case Emergency:
+                emergency();
+        }
+
+        if (state == MotorOff && new_state == MotorOn)
+            timer = get_absolute_time();
+
+        state = new_state;
     }
 }
